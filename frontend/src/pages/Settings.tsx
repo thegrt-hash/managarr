@@ -1,13 +1,25 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { getSettings, saveSettings } from '../api/client'
-import { Settings as SettingsIcon, Save, Eye, EyeOff, Film, Tv, Music, BookOpen, SkipForward } from 'lucide-react'
+import { Settings as SettingsIcon, Save, Eye, EyeOff, Film, Tv, Music, BookOpen, SkipForward, Target } from 'lucide-react'
+
+const QUALITY_OPTIONS = ['480p', '720p', '1080p', '4k', '8k'] as const
+type QualityTarget = typeof QUALITY_OPTIONS[number]
+
+const QUALITY_LABELS: Record<QualityTarget, string> = {
+  '480p': '480p SD',
+  '720p': '720p HD',
+  '1080p': '1080p FHD',
+  '4k': '4K UHD',
+  '8k': '8K',
+}
 
 const EMPTY_FORM = {
   movies_path: '',
   tv_path: '',
   music_path: '',
   audiobooks_path: '',
+  quality_target: '1080p' as string,
   tmdb_api_key: '',
   sonarr_url: '', sonarr_api_key: '',
   radarr_url: '', radarr_api_key: '',
@@ -30,6 +42,7 @@ export default function Settings() {
       tv_path: data.tv_path ?? '',
       music_path: data.music_path ?? '',
       audiobooks_path: data.audiobooks_path ?? '',
+      quality_target: data.quality_target ?? '1080p',
       tmdb_api_key: data.tmdb_api_key ?? '',
       sonarr_url: data.sonarr_url ?? '',
       sonarr_api_key: data.sonarr_api_key ?? '',
@@ -88,6 +101,14 @@ export default function Settings() {
             <input value={form.audiobooks_path} onChange={e => setForm(f => ({ ...f, audiobooks_path: e.target.value }))}
               placeholder="/media/Audiobooks" className={inputCls} />
           </Field>
+        </Section>
+
+        <Section title="Quality Target">
+          <p className="text-xs text-gray-500 mb-3">
+            Set your library's target quality. Files above or below this tier affect folder scores.
+            Changes take effect on the next scan.
+          </p>
+          <QualityToggle value={form.quality_target} onChange={v => setForm(f => ({ ...f, quality_target: v }))} />
         </Section>
 
         <Section title="TMDB (Movie & TV metadata)">
@@ -193,8 +214,8 @@ const POOL_STEPS = [
   },
 ]
 
-// Steps: 0=Welcome, 1-4=Pools, 5=TMDB, 6=Sonarr, 7=Radarr, 8=Done
-const TOTAL_STEPS = 9
+// Steps: 0=Welcome, 1-4=Pools, 5=Quality Target, 6=TMDB, 7=Sonarr, 8=Radarr, 9=Done
+const TOTAL_STEPS = 10
 
 function Wizard({ form, setForm, step, setStep, onFinish }: {
   form: typeof EMPTY_FORM
@@ -242,6 +263,14 @@ function Wizard({ form, setForm, step, setStep, onFinish }: {
           )}
           {step === 5 && (
             <GenericStep
+              title="Quality Target"
+              desc="What resolution are you standardizing your library on? Files above or below this tier will affect folder scores. You can change this any time in Settings."
+            >
+              <QualityToggle value={form.quality_target} onChange={v => setForm(f => ({ ...f, quality_target: v }))} />
+            </GenericStep>
+          )}
+          {step === 6 && (
+            <GenericStep
               title="TMDB API Key"
               desc="Enables runtime validation — Managarr compares file durations to expected runtimes. Get a free key at themoviedb.org → Settings → API."
             >
@@ -252,7 +281,7 @@ function Wizard({ form, setForm, step, setStep, onFinish }: {
               </Field>
             </GenericStep>
           )}
-          {step === 6 && (
+          {step === 7 && (
             <GenericStep
               title="Sonarr (Optional)"
               desc="Connect Sonarr to cross-reference your TV library and validate episode counts."
@@ -267,7 +296,7 @@ function Wizard({ form, setForm, step, setStep, onFinish }: {
               </Field>
             </GenericStep>
           )}
-          {step === 7 && (
+          {step === 8 && (
             <GenericStep
               title="Radarr (Optional)"
               desc="Connect Radarr to cross-reference your movie library and pull runtime data."
@@ -282,7 +311,7 @@ function Wizard({ form, setForm, step, setStep, onFinish }: {
               </Field>
             </GenericStep>
           )}
-          {isLast && <DoneStep configuredPools={POOL_STEPS.filter(p => form[p.key])} />}
+          {isLast && <DoneStep configuredPools={POOL_STEPS.filter(p => form[p.key])} qualityTarget={form.quality_target} />}
 
           {/* Navigation */}
           <div className="flex gap-3 mt-6">
@@ -365,28 +394,51 @@ function GenericStep({ title, desc, children }: { title: string; desc: string; c
   )
 }
 
-function DoneStep({ configuredPools }: { configuredPools: typeof POOL_STEPS }) {
+function DoneStep({ configuredPools, qualityTarget }: { configuredPools: typeof POOL_STEPS; qualityTarget: string }) {
   return (
     <>
       <h2 className="text-xl font-bold text-white mb-2">You're all set!</h2>
       <p className="text-gray-400 text-sm mb-4">
         Managarr is configured. Head to the Dashboard and click "Scan Library" to start analyzing your media.
       </p>
-      {configuredPools.length > 0 && (
-        <div className="bg-[#13151f] border border-[#2a2d3a] rounded-lg p-3 space-y-1.5">
-          <p className="text-xs text-gray-500 uppercase mb-2">Configured pools</p>
-          {configuredPools.map(p => (
-            <div key={p.key} className="flex items-center gap-2">
-              <p.icon size={13} className={p.iconColor} />
-              <span className="text-sm text-gray-300">{p.title}</span>
-            </div>
-          ))}
+      <div className="bg-[#13151f] border border-[#2a2d3a] rounded-lg p-3 space-y-1.5">
+        <p className="text-xs text-gray-500 uppercase mb-2">Configuration summary</p>
+        <div className="flex items-center gap-2">
+          <Target size={13} className="text-blue-400" />
+          <span className="text-sm text-gray-300">Quality target: <span className="text-white font-medium">{QUALITY_LABELS[qualityTarget as QualityTarget] ?? qualityTarget}</span></span>
         </div>
-      )}
-      {configuredPools.length === 0 && (
-        <p className="text-sm text-yellow-400">No media pools configured — go to Settings to add paths before scanning.</p>
-      )}
+        {configuredPools.map(p => (
+          <div key={p.key} className="flex items-center gap-2">
+            <p.icon size={13} className={p.iconColor} />
+            <span className="text-sm text-gray-300">{p.title}</span>
+          </div>
+        ))}
+        {configuredPools.length === 0 && (
+          <p className="text-sm text-yellow-400">No media pools — go to Settings to add paths before scanning.</p>
+        )}
+      </div>
     </>
+  )
+}
+
+function QualityToggle({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <div className="flex gap-1.5">
+      {QUALITY_OPTIONS.map(q => (
+        <button
+          key={q}
+          type="button"
+          onClick={() => onChange(q)}
+          className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${
+            value === q
+              ? 'bg-blue-600 text-white shadow-sm'
+              : 'bg-[#13151f] border border-[#2a2d3a] text-gray-400 hover:text-gray-200 hover:border-gray-500'
+          }`}
+        >
+          {q}
+        </button>
+      ))}
+    </div>
   )
 }
 

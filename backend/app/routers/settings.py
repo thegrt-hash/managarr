@@ -26,6 +26,7 @@ class SettingsPayload(BaseModel):
     bazarr_url: Optional[str] = None
     bazarr_api_key: Optional[str] = None
     subtitle_languages: Optional[str] = None
+    quality_target: Optional[str] = None
     wizard_complete: Optional[str] = None
 
 

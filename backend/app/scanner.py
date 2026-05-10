@@ -19,6 +19,17 @@ SUBTITLE_EXTENSIONS = {".srt", ".sub", ".ass", ".vtt", ".ssa", ".idx"}
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".tbn"}
 SKIP_DIRS = {"@eaDir", ".DS_Store", "@Recycle", "#recycle", ".Trash"}
 
+# Ordered quality tiers: (label, min_height)
+QUALITY_TIERS = [
+    ("480p",  480),
+    ("720p",  720),
+    ("1080p", 1080),
+    ("4k",    2160),
+    ("8k",    4320),
+]
+QUALITY_TIER_HEIGHTS: dict[str, int] = {name: h for name, h in QUALITY_TIERS}
+_TIER_HEIGHT_LIST = [h for _, h in QUALITY_TIERS]  # sorted ascending
+
 # Common language codes found in subtitle filenames: Movie.en.srt, Movie.eng.srt
 _LANG_PATTERN = re.compile(
     r'\.([a-z]{2,3})(?:\.[a-z]+)?$',  # matches .en.srt, .eng.srt, .fr.forced.srt
@@ -139,12 +150,21 @@ def _detect_folder_type(path: str, files: list[str]) -> str:
     return "unknown"
 
 
+def _tier_index(height: int) -> int:
+    """Return the quality tier index for a given resolution height (0=480p … 4=8K)."""
+    return sum(1 for th in _TIER_HEIGHT_LIST if height >= th) - 1
+
+
 def _compute_score(video_files: list[dict], iso_count: int, tmdb_runtime: Optional[int],
                    has_true_duplicates: bool = False,
                    expected_episodes: Optional[int] = None,
-                   actual_episodes: Optional[int] = None) -> tuple[float, str, list[str]]:
+                   actual_episodes: Optional[int] = None,
+                   quality_target: str = "1080p") -> tuple[float, str, list[str]]:
     score = 100.0
     reasons = []
+
+    target_height = QUALITY_TIER_HEIGHTS.get(quality_target, 1080)
+    target_tier = _tier_index(target_height)
 
     if iso_count > 0:
         score -= 40
@@ -156,30 +176,40 @@ def _compute_score(video_files: list[dict], iso_count: int, tmdb_runtime: Option
         score -= penalty
         reasons.append(f"{dup_count} duplicate video files (same title, different formats)")
     elif dup_count > 1:
-        # Multiple different movies in one folder (flat library) — mild flag only
         score -= 5
         reasons.append(f"Flat folder: {dup_count} different movies in one directory")
 
-    has_4k = any(f.get("is_4k") for f in video_files)
-    all_4k = all(f.get("is_4k") for f in video_files) if video_files else False
-    if has_4k:
+    # Flag any file that exceeds the target quality tier
+    has_above_target = any(
+        (f.get("resolution_height") or 0) > target_height for f in video_files
+    )
+    if has_above_target:
         score -= 15
-        reasons.append("4K content present (library targets 1080p)")
+        reasons.append(f"Content above target quality (library targets {quality_target})")
 
-    # Pick the best file: largest non-4K, or largest if all 4K
-    non_4k = [f for f in video_files if not f.get("is_4k")]
-    primary = max(non_4k, key=lambda f: f.get("size_bytes", 0)) if non_4k else (
-        max(video_files, key=lambda f: f.get("size_bytes", 0)) if video_files else None
+    # Pick primary: largest file at-or-below target, fall back to largest overall
+    at_or_below = [f for f in video_files if (f.get("resolution_height") or 0) <= target_height]
+    primary = (
+        max(at_or_below, key=lambda f: f.get("size_bytes", 0)) if at_or_below
+        else (max(video_files, key=lambda f: f.get("size_bytes", 0)) if video_files else None)
     )
 
     if primary:
         h = primary.get("resolution_height") or 0
-        if h and h < 720:
-            score -= 20
-            reasons.append(f"Primary file is low resolution ({primary.get('quality_label', 'SD')})")
-        elif h and h < 1080 and not primary.get("is_4k"):
-            score -= 10
-            reasons.append(f"Primary file is below 1080p ({primary.get('quality_label', 'unknown')})")
+        if h and h < target_height:
+            tiers_below = target_tier - _tier_index(h)
+            if tiers_below >= 2:
+                score -= 20
+                reasons.append(
+                    f"Primary file well below target quality "
+                    f"({primary.get('quality_label', 'unknown')} vs target {quality_target})"
+                )
+            else:
+                score -= 10
+                reasons.append(
+                    f"Primary file below target quality "
+                    f"({primary.get('quality_label', 'unknown')} vs target {quality_target})"
+                )
 
         match = runtime_match_label(primary.get("duration_seconds"), tmdb_runtime)
         if match == "mismatch":
@@ -247,7 +277,8 @@ async def _get_setting(db: AsyncSession, key: str) -> Optional[str]:
 
 
 async def _scan_folder(db: AsyncSession, folder_path: str, tmdb_key: Optional[str],
-                       radarr_map: dict, sonarr_map: dict) -> None:
+                       radarr_map: dict, sonarr_map: dict,
+                       quality_target: str = "1080p") -> None:
     entries = os.listdir(folder_path)
     video_files = [e for e in entries if os.path.splitext(e)[1].lower() in VIDEO_EXTENSIONS]
     iso_files = [e for e in entries if os.path.splitext(e)[1].lower() in ISO_EXTENSIONS]
@@ -450,6 +481,7 @@ async def _scan_folder(db: AsyncSession, folder_path: str, tmdb_key: Optional[st
         has_true_duplicates=true_dupes,
         expected_episodes=sonarr_expected_episodes,
         actual_episodes=actual_eps,
+        quality_target=quality_target,
     )
 
     video_file_count = len(video_dicts)
@@ -505,6 +537,7 @@ async def run_scan(root_paths: list[str]) -> None:
         _scan_state["job_id"] = job.id
 
         tmdb_key = await _get_setting(db, "tmdb_api_key")
+        quality_target = (await _get_setting(db, "quality_target")) or "1080p"
 
         # Build Radarr path map — include all metadata so we don't need TMDB API calls
         radarr_res = await db.execute(select(RadarrMovie))
@@ -554,7 +587,7 @@ async def run_scan(root_paths: list[str]) -> None:
         _scan_state["progress"] = i + 1
         try:
             async with AsyncSessionLocal() as db:
-                await _scan_folder(db, folder_path, tmdb_key, radarr_map, sonarr_map)
+                await _scan_folder(db, folder_path, tmdb_key, radarr_map, sonarr_map, quality_target)
         except Exception as e:
             _scan_state["errors"].append(f"{folder_path}: {e}")
 

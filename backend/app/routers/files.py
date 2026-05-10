@@ -8,7 +8,7 @@ from sqlalchemy.orm import selectinload
 from pydantic import BaseModel
 from typing import List
 
-from ..database import get_db, MediaFile, MediaFolder
+from ..database import get_db, MediaFile, MediaFolder, Setting
 from ..ffprobe import format_size
 from ..scanner import _compute_score, _detect_duplicates
 from ..tmdb import runtime_match_label
@@ -84,6 +84,9 @@ async def bulk_move(payload: BulkMovePayload, db: AsyncSession = Depends(get_db)
 
 
 async def _rescore_folder(db: AsyncSession, folder_id: int) -> None:
+    qt_row = await db.get(Setting, "quality_target")
+    quality_target = qt_row.value if qt_row else "1080p"
+
     result = await db.execute(
         select(MediaFolder).options(selectinload(MediaFolder.files)).where(MediaFolder.id == folder_id)
     )
@@ -108,7 +111,8 @@ async def _rescore_folder(db: AsyncSession, folder_id: int) -> None:
 
     true_dupes = _detect_duplicates([f.filename for f in video_files])
     score, label, reasons = _compute_score(file_dicts, len(iso_files), folder.tmdb_runtime_minutes,
-                                           has_true_duplicates=true_dupes)
+                                           has_true_duplicates=true_dupes,
+                                           quality_target=quality_target)
     folder.score = score
     folder.score_label = label
     folder.score_reasons = json.dumps(reasons)
