@@ -1,0 +1,13 @@
+services:
+  managarr:
+    build: .
+    image: managarr:latest
+    container_name: managarr
+    ports:
+      - "8765:8000"
+    volumes:
+      - /mnt/user/appdata/managarr/data:/data
+      - /mnt/user/MainShare:/media
+    environment:
+      - DATA_DIR=/data
+    restart: unless-stopped

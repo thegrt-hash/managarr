@@ -1,0 +1,27 @@
+# Database and runtime data
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Node / frontend build
+node_modules/
+frontend/dist/
+backend/app/static/
+
+# Docker
+.dockerenv
+
+# Unraid template (local deployment artifact)
+managarr-unraid.xml
+
+# OS
+.DS_Store
+Thumbs.db
